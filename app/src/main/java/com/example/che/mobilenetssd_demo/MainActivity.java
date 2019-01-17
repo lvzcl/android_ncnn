@@ -21,8 +21,10 @@ import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
+import android.widget.MediaController;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.VideoView;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -43,9 +45,13 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = MainActivity.class.getName();
     private static final int USE_PHOTO = 1001;
     private String camera_image_path;
-    private ImageView show_image;
+    //private ImageView show_image;
     private TextView result_text;
     private boolean load_result = false;
+    private Button use_video;
+    private Button stop_video;
+    private MediaController mediaControll;
+    private VideoView videoView;
     private int[] ddims = {1, 3, 300, 300}; //这里的维度的值要和train model的input 一一对应
     private int model_index = 1;
     private List<String> resultLabel = new ArrayList<>();
@@ -58,12 +64,47 @@ public class MainActivity extends AppCompatActivity {
         try
         {
             initMobileNetSSD();
+            show_video();
         } catch (IOException e) {
             Log.e("MainActivity", "initMobileNetSSD error");
         }
         init_view();
         readCacheLabelFromLocalFile();
-}
+    }
+    //显示视频数据
+    private void show_video() {
+        use_video = (Button) findViewById(R.id.use_video);
+        stop_video = (Button) findViewById(R.id.stop_video);
+        use_video.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startPlayer();
+            }
+        });
+        stop_video.setOnClickListener(new View.OnClickListener(){
+            @Override
+            public void onClick(View v){
+                stopPlayer();
+            }
+        });
+    }
+
+    /**
+     * 进行视频数据的播放
+     */
+    private void startPlayer(){
+        videoView = (VideoView) findViewById(R.id.videoView);
+        mediaControll = new MediaController(this);
+        String uri = "android.resource://" + getPackageName() + "/" + R.raw.test;
+        videoView.setVideoURI(Uri.parse(uri));
+        videoView.setMediaController(mediaControll);
+        videoView.requestFocus();
+        videoView.start();
+    }
+
+    private void stopPlayer(){
+        videoView.stopPlayback();
+    }
 
     /**
      *
@@ -97,7 +138,7 @@ public class MainActivity extends AppCompatActivity {
     // initialize view
     private void init_view() {
         request_permissions();
-        show_image = (ImageView) findViewById(R.id.show_image);
+        //show_image = (ImageView) findViewById(R.id.show_image);
         result_text = (TextView) findViewById(R.id.result_text);
         result_text.setMovementMethod(ScrollingMovementMethod.getInstance());
         Button use_photo = (Button) findViewById(R.id.use_photo);
@@ -208,7 +249,7 @@ public class MainActivity extends AppCompatActivity {
                         get_finalresult[object_num][2]*rgba.getWidth(),get_finalresult[object_num][3]*rgba.getHeight(),paint);
             }
 
-            show_image.setImageBitmap(rgba);
+            //show_image.setImageBitmap(rgba);
 
 
         } catch (Exception e) {
