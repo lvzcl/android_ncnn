@@ -9,7 +9,11 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.media.MediaMetadata;
+import android.media.MediaMetadataRetriever;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Message;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.v4.app.ActivityCompat;
@@ -27,11 +31,14 @@ import android.widget.Toast;
 import android.widget.VideoView;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 
 
@@ -45,32 +52,48 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = MainActivity.class.getName();
     private static final int USE_PHOTO = 1001;
     private String camera_image_path;
-    //private ImageView show_image;
+    private ImageView show_image;
     private TextView result_text;
     private boolean load_result = false;
     private Button use_video;
     private Button stop_video;
     private MediaController mediaControll;
-    private VideoView videoView;
+    //private VideoView videoView;
     private int[] ddims = {1, 3, 300, 300}; //这里的维度的值要和train model的input 一一对应
     private int model_index = 1;
     private List<String> resultLabel = new ArrayList<>();
     private MobileNetssd mobileNetssd = new MobileNetssd(); //java接口实例化　下面直接利用java函数调用NDK c++函数
+    private Handler update_ui = null;
+
+    public static final int SUCCESS_CODE = 1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        update_ui = new Handler(){
+            @Override
+            public void handleMessage(Message msg){
+                Bitmap bitmap = (Bitmap) msg.obj;
+                show_image.setImageBitmap(bitmap);
+            }
+        };
+
         try
         {
             initMobileNetSSD();
-            show_video();
+            //show_video();
         } catch (IOException e) {
             Log.e("MainActivity", "initMobileNetSSD error");
         }
         init_view();
         readCacheLabelFromLocalFile();
+        show_video();
+
     }
+
+
     //显示视频数据
     private void show_video() {
         use_video = (Button) findViewById(R.id.use_video);
@@ -78,20 +101,31 @@ public class MainActivity extends AppCompatActivity {
         use_video.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                startPlayer();
+                //startPlayer();
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            getBitmapFromVideo();
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                    }
+                }).start();
+
             }
         });
         stop_video.setOnClickListener(new View.OnClickListener(){
             @Override
             public void onClick(View v){
-                stopPlayer();
+                //stopPlayer();
             }
         });
     }
 
-    /**
+    /*
      * 进行视频数据的播放
-     */
+     *
     private void startPlayer(){
         videoView = (VideoView) findViewById(R.id.videoView);
         mediaControll = new MediaController(this);
@@ -104,6 +138,98 @@ public class MainActivity extends AppCompatActivity {
 
     private void stopPlayer(){
         videoView.stopPlayback();
+    }
+        */
+
+    /**
+     * 从视频数据中取出帧图像数据
+     */
+    private void getBitmapFromVideo(){
+        String data_path = "android.resource://" + getPackageName() + "/" + R.raw.test;
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        retriever.setDataSource(getApplicationContext(), Uri.parse(data_path));
+        //取得视频帧的长度(ms)
+        String time = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+        Bitmap bitmap = null;
+        int seconds = Integer.valueOf(time)/1000;
+        Log.d("seconds", String.valueOf(seconds));
+        for(int i = 0; i<=seconds; i++){
+            Log.d("second", String.valueOf(i));
+            long start = System.currentTimeMillis();
+            bitmap = retriever.getFrameAtTime(i*1000*1000,MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+            predict_bitmap(bitmap);
+            long end = System.currentTimeMillis();
+            Log.d("time of one image", String.valueOf(end - start));
+        }
+        //predict_bitmap(bitmap);
+        String show_text = "video ending";
+        result_text.setText(show_text);
+    }
+
+
+    private void predict_bitmap(Bitmap bmp) {
+        // picture to float array
+        //Bitmap bmp = PhotoUtil.getScaleBitmap(image_path);
+        Bitmap rgba = bmp.copy(Bitmap.Config.ARGB_8888, true);
+        // resize
+        Bitmap input_bmp = Bitmap.createScaledBitmap(rgba, ddims[2], ddims[3], false);
+        try {
+            // Data format conversion takes too long
+            long start = System.currentTimeMillis();
+            // get predict result
+            float[] result = mobileNetssd.Detect(input_bmp);
+            // time end
+            long end = System.currentTimeMillis();
+            Log.d(TAG, "origin predict result:" + Arrays.toString(result));
+            long time = end - start;
+            //"result：" + Arrays.toString(result) + "\nname：" +
+            String show_text = resultLabel.get((int) result[0]) + "\nprobability：" + result[1] + "\ntime：" + time + "ms" ;
+            result_text.setText(show_text);
+
+            // 画布配置
+            Canvas canvas = new Canvas(rgba);
+            //图像上画矩形
+            Paint paint = new Paint();
+            paint.setColor(Color.RED);
+            paint.setStyle(Paint.Style.STROKE);//不填充
+            paint.setStrokeWidth(5); //线的宽度
+
+
+            float get_finalresult[][] = TwoArry(result);
+            //Log.d("zhuanhuan",get_finalresult+"");
+            int object_num = 0;
+            int num = result.length/6;// number of object
+            //continue to draw rect
+            for(object_num = 0; object_num < num; object_num++){
+                //Log.d(TAG, "haha :" + Arrays.toString(get_finalresult));
+                // 画框
+                paint.setColor(Color.RED);
+                paint.setStyle(Paint.Style.STROKE);//不填充
+                paint.setStrokeWidth(5); //线的宽度
+                canvas.drawRect(get_finalresult[object_num][2] * rgba.getWidth(), get_finalresult[object_num][3] * rgba.getHeight(),
+                        get_finalresult[object_num][4] * rgba.getWidth(), get_finalresult[object_num][5] * rgba.getHeight(), paint);
+
+                paint.setColor(Color.YELLOW);
+                paint.setStyle(Paint.Style.FILL);//不填充
+                paint.setStrokeWidth(1); //线的宽度
+                canvas.drawText(resultLabel.get((int) get_finalresult[object_num][0]) + "\n" + get_finalresult[object_num][1],
+                        get_finalresult[object_num][2]*rgba.getWidth(),get_finalresult[object_num][3]*rgba.getHeight(),paint);
+            }
+            //不能直接在子线程里面直接更行UI，需要通过Handler传递数据，然后在子线程里面进行更新
+            Message msg = new Message();
+            msg.obj = rgba;
+            msg.what = SUCCESS_CODE;
+            update_ui.sendMessage(msg);
+
+            //show_image.setImageBitmap(rgba);
+            //ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            //rgba.compress(Bitmap.CompressFormat.JPEG, 100, baos);
+            //byte[] bitmap_bytes = baos.toByteArray();
+            //Glide.with(MainActivity.this).load(bitmap_bytes).into(show_image);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     /**
@@ -138,7 +264,7 @@ public class MainActivity extends AppCompatActivity {
     // initialize view
     private void init_view() {
         request_permissions();
-        //show_image = (ImageView) findViewById(R.id.show_image);
+        show_image = (ImageView) findViewById(R.id.show_image);
         result_text = (TextView) findViewById(R.id.result_text);
         result_text.setMovementMethod(ScrollingMovementMethod.getInstance());
         Button use_photo = (Button) findViewById(R.id.use_photo);
@@ -189,74 +315,11 @@ public class MainActivity extends AppCompatActivity {
                     // get image path from uri
                     image_path = PhotoUtil.get_path_from_URI(MainActivity.this, image_uri);
                     // predict image
-                    predict_image(image_path);
+                    //predict_image(image_path);
                     break;
             }
         }
     }
-
-    //  predict image
-    private void predict_image(String image_path) {
-        // picture to float array
-        Bitmap bmp = PhotoUtil.getScaleBitmap(image_path);
-        Bitmap rgba = bmp.copy(Bitmap.Config.ARGB_8888, true);
-        // resize
-        Bitmap input_bmp = Bitmap.createScaledBitmap(rgba, ddims[2], ddims[3], false);
-        try {
-            // Data format conversion takes too long
-            // Log.d("inputData", Arrays.toString(inputData));
-            long start = System.currentTimeMillis();
-            // get predict result
-            float[] result = mobileNetssd.Detect(input_bmp);
-            // time end
-            long end = System.currentTimeMillis();
-            Log.d(TAG, "origin predict result:" + Arrays.toString(result));
-            long time = end - start;
-            Log.d("result length", "length of result: " + String.valueOf(result.length));
-            // show predict result and time
-            // float[] r = get_max_result(result);
-
-            String show_text = "result：" + Arrays.toString(result) + "\nname：" + resultLabel.get((int) result[0]) + "\nprobability：" + result[1] + "\ntime：" + time + "ms" ;
-            result_text.setText(show_text);
-
-            // 画布配置
-            Canvas canvas = new Canvas(rgba);
-            //图像上画矩形
-            Paint paint = new Paint();
-            paint.setColor(Color.RED);
-            paint.setStyle(Paint.Style.STROKE);//不填充
-            paint.setStrokeWidth(5); //线的宽度
-
-
-            float get_finalresult[][] = TwoArry(result);
-            Log.d("zhuanhuan",get_finalresult+"");
-            int object_num = 0;
-            int num = result.length/6;// number of object
-            //continue to draw rect
-            for(object_num = 0; object_num < num; object_num++){
-                Log.d(TAG, "haha :" + Arrays.toString(get_finalresult));
-                // 画框
-                paint.setColor(Color.RED);
-                paint.setStyle(Paint.Style.STROKE);//不填充
-                paint.setStrokeWidth(5); //线的宽度
-                canvas.drawRect(get_finalresult[object_num][2] * rgba.getWidth(), get_finalresult[object_num][3] * rgba.getHeight(),
-                        get_finalresult[object_num][4] * rgba.getWidth(), get_finalresult[object_num][5] * rgba.getHeight(), paint);
-
-                paint.setColor(Color.YELLOW);
-                paint.setStyle(Paint.Style.FILL);//不填充
-                paint.setStrokeWidth(1); //线的宽度
-                canvas.drawText(resultLabel.get((int) get_finalresult[object_num][0]) + "\n" + get_finalresult[object_num][1],
-                        get_finalresult[object_num][2]*rgba.getWidth(),get_finalresult[object_num][3]*rgba.getHeight(),paint);
-            }
-
-            //show_image.setImageBitmap(rgba);
-
-
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
     //一维数组转化为二维数组
     public static float[][] TwoArry(float[] inputfloat){
         int n = inputfloat.length;
